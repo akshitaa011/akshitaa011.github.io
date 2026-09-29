@@ -1,12 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+import { motion } from 'framer-motion';
 import { 
   FolderGit2, 
-  Sparkles, 
   CheckCircle2, 
-  Cpu, 
-  GitPullRequest, 
-  Server,
   Star,
   Calendar,
   Code2,
@@ -15,9 +11,6 @@ import {
 import { Github } from './Icons';
 import { portfolioData } from '../data/portfolioData';
 import fallbackRepos from '../data/github-repos.json';
-import AstPlayground from './AstPlayground';
-import SpringBootArchitecture from './SpringBootArchitecture';
-import SubmittyPrViewer from './SubmittyPrViewer';
 import { playClickSound, playHoverSound } from '../utils/audioFx';
 
 const GITHUB_USERNAME = 'akshitaa011';
@@ -178,7 +171,6 @@ function ProjectCard({ project }) {
 export default function Projects() {
   const { projects } = portfolioData;
   const [activeFilter, setActiveFilter] = useState('All');
-  const [activeInteractiveDemo, setActiveInteractiveDemo] = useState('ast'); // 'ast', 'spring', 'submitty', 'none'
 
   // Additional GitHub repositories state with runtime API fetch + fallback + cache
   const [moreRepos, setMoreRepos] = useState(fallbackRepos || []);
@@ -266,7 +258,7 @@ export default function Projects() {
             <span>Featured Engineering</span>
           </div>
           <h2 className="text-3xl sm:text-4xl font-extrabold font-heading text-white tracking-tight">
-            Flagship Software & <span className="text-gradient">Interactive Systems</span>
+            Flagship Software & <span className="text-gradient">Systems</span>
           </h2>
           <p className="text-[#9CA3AF] text-sm sm:text-base max-w-2xl mt-3">
             Production systems, AST-based static code analyzers, and event-driven architectures built for developer productivity and user impact.
@@ -294,105 +286,6 @@ export default function Projects() {
           </div>
         </div>
 
-        {/* Interactive Flagship Demonstrator Tabs */}
-        <div className="mb-14">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-mono uppercase tracking-wider text-white font-bold flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-[#10B981]" />
-                <span>Interactive Architecture & Demos</span>
-              </span>
-            </div>
-
-            {/* Toggle demo selector */}
-            <div className="flex items-center gap-1.5 p-1 rounded-xl bg-slate-900/80 border border-white/[0.08] text-xs font-mono">
-              <button
-                onClick={() => {
-                  playClickSound();
-                  setActiveInteractiveDemo(activeInteractiveDemo === 'ast' ? 'none' : 'ast');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  activeInteractiveDemo === 'ast'
-                    ? 'bg-[#10B981]/20 border border-[#10B981]/50 text-[#34D399] font-semibold'
-                    : 'text-[#9CA3AF] hover:text-white'
-                }`}
-              >
-                <Cpu className="w-3.5 h-3.5" />
-                <span>AST Parser (EnvGuard)</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  playClickSound();
-                  setActiveInteractiveDemo(activeInteractiveDemo === 'spring' ? 'none' : 'spring');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  activeInteractiveDemo === 'spring'
-                    ? 'bg-[#10B981]/20 border border-[#10B981]/50 text-[#34D399] font-semibold'
-                    : 'text-[#9CA3AF] hover:text-white'
-                }`}
-              >
-                <Server className="w-3.5 h-3.5" />
-                <span>Spring Boot Microservices</span>
-              </button>
-
-              <button
-                onClick={() => {
-                  playClickSound();
-                  setActiveInteractiveDemo(activeInteractiveDemo === 'submitty' ? 'none' : 'submitty');
-                }}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg transition-all cursor-pointer ${
-                  activeInteractiveDemo === 'submitty'
-                    ? 'bg-[#10B981]/20 border border-[#10B981]/50 text-[#34D399] font-semibold'
-                    : 'text-[#9CA3AF] hover:text-white'
-                }`}
-              >
-                <GitPullRequest className="w-3.5 h-3.5" />
-                <span>Submitty PR Diffs</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Demos Content Panel */}
-          <AnimatePresence mode="wait">
-            {activeInteractiveDemo === 'ast' && (
-              <motion.div
-                key="ast"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.25 }}
-              >
-                <AstPlayground />
-              </motion.div>
-            )}
-
-            {activeInteractiveDemo === 'spring' && (
-              <motion.div
-                key="spring"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.25 }}
-              >
-                <SpringBootArchitecture />
-              </motion.div>
-            )}
-
-            {activeInteractiveDemo === 'submitty' && (
-              <motion.div
-                key="submitty"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                transition={{ duration: 0.25 }}
-              >
-                <SubmittyPrViewer />
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-
         {/* Projects Bento Grid with Dynamic Staggered Reveal */}
         <motion.div 
           initial="hidden"
@@ -413,7 +306,6 @@ export default function Projects() {
             <ProjectCard
               key={project.id}
               project={project}
-              onOpenDemo={(demoKey) => setActiveInteractiveDemo(demoKey)}
             />
           ))}
         </motion.div>
