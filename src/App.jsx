@@ -9,7 +9,6 @@ import Achievements from './components/Achievements';
 import Leadership from './components/Leadership';
 import Contact from './components/Contact';
 import Footer from './components/Footer';
-import FloatingDock from './components/FloatingDock';
 import TerminalModal from './components/TerminalModal';
 import RecruiterDrawer from './components/RecruiterDrawer';
 import DynamicBackground from './components/DynamicBackground';
@@ -162,10 +161,17 @@ export default function App() {
       <DynamicBackground />
 
       {/* 3. Clean Top Header Navigation */}
-      <Navbar />
+      <Navbar 
+        onOpenTerminal={() => {
+          playClickSound();
+          setIsTerminalOpen(true);
+        }}
+        soundMuted={isAudioMuted}
+        onToggleSound={handleToggleAudio}
+      />
 
       {/* 4. Full-Width Unified Content Flow with Dynamic 3D Scroll Reveals */}
-      <main className="relative z-10 max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-16 sm:pt-20 pb-32 space-y-24">
+      <main className="relative z-10 max-w-6xl mx-auto w-full px-4 sm:px-6 lg:px-8 pt-16 sm:pt-20 pb-12 sm:pb-16 space-y-24">
         
         {/* Sector 01: Hero */}
         <ScrollReveal direction="depth" duration={1.0}>
@@ -178,6 +184,8 @@ export default function App() {
               playClickSound();
               setIsTerminalOpen(true);
             }}
+            isTourActive={isTourActive}
+            onToggleTour={handleToggleTour}
           />
         </ScrollReveal>
 
@@ -219,22 +227,6 @@ export default function App() {
         {/* Footer */}
         <Footer />
       </main>
-
-      {/* 4. Single Root-Level Floating Command Dock (Centered at bottom) */}
-      <FloatingDock 
-        onOpenTerminal={() => {
-          playClickSound();
-          setIsTerminalOpen(true);
-        }}
-        onOpenRecruiter={() => {
-          playClickSound();
-          setIsRecruiterOpen(true);
-        }}
-        isTourActive={isTourActive}
-        onToggleTour={handleToggleTour}
-        soundMuted={isAudioMuted}
-        onToggleSound={handleToggleAudio}
-      />
 
       {/* Slide-Up Terminal Drawer Modal */}
       <TerminalModal 

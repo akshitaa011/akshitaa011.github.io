@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { FileText, Menu, X } from 'lucide-react';
+import { FileText, Menu, X, Volume2, VolumeX } from 'lucide-react';
 import { portfolioData } from '../data/portfolioData';
 import { playClickSound, playHoverSound } from '../utils/audioFx';
 
-export default function Navbar() {
+export default function Navbar({ onOpenTerminal, soundMuted = true, onToggleSound }) {
   const [scrolled, setScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
@@ -90,8 +90,41 @@ export default function Navbar() {
           ))}
         </nav>
 
-        {/* Action Controls */}
-        <div className="hidden sm:flex items-center gap-2.5">
+        {/* Action Controls (Desktop) */}
+        <div className="hidden sm:flex items-center gap-2">
+          {/* Sound Toggle (Speaker icon button, default OFF, persisted) */}
+          <button
+            onClick={onToggleSound}
+            onMouseEnter={playHoverSound}
+            aria-label={soundMuted ? "Sound is OFF. Click to unmute" : "Sound is ON. Click to mute"}
+            title={soundMuted ? "Sound is OFF (Click to unmute)" : "Sound is ON (Click to mute)"}
+            className={`flex items-center justify-center w-8 h-8 rounded-lg transition-all cursor-pointer border ${
+              !soundMuted
+                ? 'bg-[#10B981]/15 border-[#10B981]/40 text-[#34D399] shadow-[0_0_12px_rgba(16,185,129,0.25)]'
+                : 'bg-[rgba(17,24,39,0.7)] hover:bg-slate-800 border-white/[0.1] text-slate-400 hover:text-white'
+            }`}
+          >
+            {!soundMuted ? (
+              <Volume2 className="w-4 h-4 text-[#34D399]" />
+            ) : (
+              <VolumeX className="w-4 h-4 text-slate-400" />
+            )}
+          </button>
+
+          {/* Terminal Quick-Trigger (>_ with aria-label and tooltip "Terminal (Ctrl+K)") */}
+          <button
+            onClick={() => {
+              playClickSound();
+              onOpenTerminal?.();
+            }}
+            onMouseEnter={playHoverSound}
+            aria-label="Terminal (Ctrl+K)"
+            title="Terminal (Ctrl+K)"
+            className="flex items-center justify-center w-8 h-8 rounded-lg bg-[rgba(17,24,39,0.7)] hover:bg-slate-800 text-[#A5B4FC] hover:text-white border border-white/[0.1] hover:border-[#6366F1]/50 font-mono font-bold text-xs tracking-tighter transition-all cursor-pointer shadow-sm hover:scale-105"
+          >
+            <span>&gt;_</span>
+          </button>
+
           {/* Resume Download / View */}
           <a
             href={portfolioData.personal.links.resumePdf}
@@ -104,8 +137,36 @@ export default function Navbar() {
           </a>
         </div>
 
-        {/* Mobile Hamburger Trigger */}
-        <div className="flex sm:hidden items-center gap-2">
+        {/* Mobile Header Controls */}
+        <div className="flex sm:hidden items-center gap-1.5">
+          {/* Sound Toggle (Mobile Compact) */}
+          <button
+            onClick={onToggleSound}
+            aria-label={soundMuted ? "Sound is OFF. Click to unmute" : "Sound is ON. Click to mute"}
+            title={soundMuted ? "Sound is OFF (Click to unmute)" : "Sound is ON (Click to mute)"}
+            className={`p-2 rounded-xl border transition-colors cursor-pointer ${
+              !soundMuted
+                ? 'bg-[#10B981]/15 border-[#10B981]/40 text-[#34D399]'
+                : 'bg-[rgba(17,24,39,0.7)] border-white/[0.1] text-slate-400'
+            }`}
+          >
+            {!soundMuted ? <Volume2 className="w-4 h-4 text-[#34D399]" /> : <VolumeX className="w-4 h-4" />}
+          </button>
+
+          {/* Terminal Quick-Trigger (Mobile Compact) */}
+          <button
+            onClick={() => {
+              playClickSound();
+              onOpenTerminal?.();
+            }}
+            aria-label="Terminal (Ctrl+K)"
+            title="Terminal (Ctrl+K)"
+            className="p-2 rounded-xl bg-[rgba(17,24,39,0.7)] border border-white/[0.1] text-[#A5B4FC] hover:text-white font-mono font-bold text-xs transition-colors cursor-pointer"
+          >
+            <span>&gt;_</span>
+          </button>
+
+          {/* Hamburger Menu Toggle */}
           <button
             onClick={() => {
               playClickSound();
@@ -130,7 +191,7 @@ export default function Navbar() {
           aria-label="Mobile Navigation"
         >
           <div 
-            className="bg-[#030712]/98 border-b border-white/[0.1] px-6 py-6 space-y-4 shadow-2xl animate-in slide-in-from-top-4 duration-200"
+            className="bg-[#030712]/98 border-b border-white/[0.1] px-6 py-6 space-y-4 shadow-2xl animate-in slide-in-from-top-4 duration-200 max-h-[calc(100vh-65px)] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex flex-col space-y-1">
@@ -150,7 +211,40 @@ export default function Navbar() {
               ))}
             </div>
 
-            <div className="pt-2 border-t border-white/[0.08]">
+            <div className="pt-3 border-t border-white/[0.08] space-y-2">
+              {/* Terminal Button */}
+              <button
+                onClick={() => {
+                  playClickSound();
+                  setMobileMenuOpen(false);
+                  onOpenTerminal?.();
+                }}
+                className="w-full flex items-center justify-between py-2.5 px-3 rounded-lg text-sm font-mono text-[#A5B4FC] hover:bg-white/[0.04] transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  <span className="font-bold text-base">&gt;_</span>
+                  <span>Terminal</span>
+                </span>
+                <kbd className="text-[10px] bg-slate-900 px-1.5 py-0.5 rounded text-slate-400 border border-white/[0.1]">Ctrl+K</kbd>
+              </button>
+
+              {/* Sound Toggle */}
+              <button
+                onClick={() => {
+                  onToggleSound();
+                }}
+                className="w-full flex items-center justify-between py-2.5 px-3 rounded-lg text-sm font-mono text-slate-300 hover:bg-white/[0.04] transition-colors cursor-pointer"
+              >
+                <span className="flex items-center gap-2">
+                  {!soundMuted ? <Volume2 className="w-4 h-4 text-[#34D399]" /> : <VolumeX className="w-4 h-4 text-slate-400" />}
+                  <span>Sound Effects</span>
+                </span>
+                <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${!soundMuted ? 'bg-[#10B981]/20 text-[#34D399]' : 'bg-slate-800 text-slate-400'}`}>
+                  {!soundMuted ? 'ON' : 'OFF'}
+                </span>
+              </button>
+
+              {/* Download Resume PDF */}
               <a
                 href={portfolioData.personal.links.resumePdf}
                 download="Akshita_Singhal_Resume.pdf"
@@ -158,7 +252,7 @@ export default function Navbar() {
                   playClickSound();
                   setMobileMenuOpen(false);
                 }}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black font-semibold text-xs shadow-md shadow-[#10B981]/25 transition-all"
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black font-semibold text-xs shadow-md shadow-[#10B981]/25 transition-all cursor-pointer"
               >
                 <FileText className="w-4 h-4" />
                 <span>Download Resume (PDF)</span>

@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { ArrowDown, Zap, Terminal, Sparkles, Box, Code } from 'lucide-react';
+import { ArrowDown, Zap, Terminal, Sparkles, Box, Code, Play, Pause } from 'lucide-react';
 import { Github, Linkedin, LeetCode } from './Icons';
 import { portfolioData } from '../data/portfolioData';
 import KineticName from './KineticName';
 import TechKeywordTooltip from './TechKeywordTooltip';
 import LiveActivityTicker from './LiveActivityTicker';
 import MagneticButton from './MagneticButton';
+import { playClickSound, playHoverSound } from '../utils/audioFx';
 
 const easeOutExpo = [0.16, 1, 0.3, 1];
 
@@ -16,7 +17,7 @@ const ROLES = [
   "Open Source Contributor"
 ];
 
-export default function Hero({ onOpenRecruiter, onOpenTerminal }) {
+export default function Hero({ onOpenRecruiter, onOpenTerminal, isTourActive = false, onToggleTour }) {
   const { personal } = portfolioData;
 
   const [roleIndex, setRoleIndex] = useState(0);
@@ -175,14 +176,14 @@ export function scanEnvVars(code: string) {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.9, delay: 0.35, ease: easeOutExpo }}
-          className="flex flex-wrap items-center justify-center gap-4 mb-6"
+          className="flex flex-wrap items-center justify-center gap-4 mb-4"
         >
           <MagneticButton
             onClick={onOpenRecruiter}
             className="flex items-center gap-2.5 px-6 py-3 rounded-xl bg-[#10B981] hover:bg-[#059669] text-black font-semibold text-sm transition-all duration-300 shadow-[0_0_25px_rgba(16,185,129,0.35)] hover:shadow-[0_0_35px_rgba(16,185,129,0.5)] cursor-pointer group hover:scale-[1.02]"
           >
             <Zap className="w-4 h-4 text-black fill-black" />
-            <span>Recruiter Speed-Run (30s)</span>
+            <span>Recruiter Mode (30s Speed-Run)</span>
           </MagneticButton>
 
           <MagneticButton
@@ -197,12 +198,46 @@ export function scanEnvVars(code: string) {
           </MagneticButton>
         </motion.div>
 
-        {/* Muted Monochrome Social Proof Bar with Vertical Clearance from Floating Dock */}
+        {/* Cinematic Tour Secondary Text Link */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.9, delay: 0.4, ease: easeOutExpo }}
+          className="flex items-center justify-center mb-6"
+        >
+          <button
+            onClick={() => {
+              playClickSound();
+              onToggleTour?.();
+            }}
+            onMouseEnter={playHoverSound}
+            className={`inline-flex items-center gap-2 text-xs font-mono transition-all cursor-pointer py-1.5 px-3.5 rounded-full border ${
+              isTourActive
+                ? 'bg-[#10B981]/20 border-[#10B981]/60 text-[#34D399] shadow-[0_0_15px_rgba(16,185,129,0.25)]'
+                : 'bg-white/[0.03] hover:bg-white/[0.08] border-white/[0.08] hover:border-white/20 text-[#9CA3AF] hover:text-[#34D399]'
+            }`}
+          >
+            {isTourActive ? (
+              <>
+                <Pause className="w-3.5 h-3.5 fill-[#34D399] text-[#34D399]" />
+                <span>Cinematic Tour Active • Click to Pause</span>
+              </>
+            ) : (
+              <>
+                <Play className="w-3.5 h-3.5 fill-[#10B981] text-[#10B981] transition-transform group-hover:scale-110" />
+                <span>Take a 60s Cinematic Tour</span>
+                <span className="text-slate-600">→</span>
+              </>
+            )}
+          </button>
+        </motion.div>
+
+        {/* Muted Monochrome Social Proof Bar */}
         <motion.div
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 1, delay: 0.45, ease: easeOutExpo }}
-          className="flex flex-wrap items-center justify-center gap-5 text-xs font-mono text-[#9CA3AF] pb-6"
+          className="flex flex-wrap items-center justify-center gap-5 text-xs font-mono text-[#9CA3AF] pb-4"
         >
           <a
             href={personal.links.github}
