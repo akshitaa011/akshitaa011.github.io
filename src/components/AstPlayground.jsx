@@ -342,16 +342,15 @@ export default function AstPlayground() {
         missing.push({ varName, refs });
       } else {
         const hasEmpty = inEnv.some(e => e.isEmpty);
-        if (hasEmpty) {
+        const hasSecurity = refs.some(r => r.isVitePrefixIssue);
+
+        if (hasSecurity) {
+          security.push({ varName, refs, envEntries: inEnv });
+        } else if (hasEmpty) {
           empty.push({ varName, refs, envEntry: inEnv.find(e => e.isEmpty) });
         } else {
           valid.push({ varName, refs, envEntries: inEnv });
         }
-      }
-
-      // Vite prefix security check
-      if (refs.some(r => r.isVitePrefixIssue)) {
-        security.push({ varName, refs });
       }
     });
 
@@ -438,7 +437,16 @@ export default function AstPlayground() {
     }
 
     out += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    out += `Summary: ${analysis.valid.length} Valid | ${analysis.missing.length} Missing | ${analysis.dead.length} Dead | ${analysis.empty.length} Empty | ${analysis.duplicate.length} Duplicate\n`;
+    const summaryParts = [
+      `${analysis.valid.length} Valid`,
+      analysis.security.length > 0 ? `${analysis.security.length} Security Warning${analysis.security.length > 1 ? 's' : ''}` : null,
+      `${analysis.missing.length} Missing`,
+      `${analysis.dead.length} Dead`,
+      `${analysis.empty.length} Empty`,
+      `${analysis.duplicate.length} Duplicate`
+    ].filter(Boolean);
+
+    out += `Summary: ${summaryParts.join(' | ')}\n`;
     out += `Execution: 0.12s | @babel/parser dynamic engine`;
 
     return out;
@@ -713,6 +721,11 @@ export default function AstPlayground() {
           <span className="px-2 py-0.5 rounded-md badge-emerald text-[11px]">
             {analysis.valid.length} Valid
           </span>
+          {analysis.security.length > 0 && (
+            <span className="px-2 py-0.5 rounded-md text-[11px] bg-amber-950/60 text-amber-300 border border-amber-500/40 font-semibold">
+              {analysis.security.length} Security Warning{analysis.security.length > 1 ? 's' : ''}
+            </span>
+          )}
           <span className={`px-2 py-0.5 rounded-md text-[11px] ${analysis.missing.length > 0 ? 'bg-rose-950/60 text-rose-300 border border-rose-500/40' : 'bg-slate-900 text-slate-500 border border-white/5'}`}>
             {analysis.missing.length} Missing
           </span>
