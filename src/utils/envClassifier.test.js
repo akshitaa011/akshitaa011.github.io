@@ -141,3 +141,116 @@ NODE_ENV=development
     expect(scan.violations.length).toBe(0);
   });
 });
+
+describe('EnvGuard Environment Variable Aliases & Shadowing', () => {
+  it('resolves alias read in a nested function', () => {
+    const code = `
+const env = process.env;
+function outer() {
+  function inner() {
+    return env.NESTED_SECRET;
+  }
+  return inner();
+}
+`;
+    const env = `
+NESTED_SECRET=nested_value_123
+`;
+    const scan = runScan(code, env, 'nextjs');
+    const res = scan.getResult('NESTED_SECRET');
+    expect(res).toBeDefined();
+    expect(res.status).toBe('valid');
+    expect(scan.violations.length).toBe(0);
+    expect(scan.cliOutput).toContain('1 Valid');
+  });
+
+  it('resolves alias destructuring: const { A } = env', () => {
+    const code = `
+const env = process.env;
+const { DEST_VAR } = env;
+`;
+    const env = `
+DEST_VAR=destructured_val
+`;
+    const scan = runScan(code, env, 'nextjs');
+    const res = scan.getResult('DEST_VAR');
+    expect(res).toBeDefined();
+    expect(res.status).toBe('valid');
+    expect(scan.violations.length).toBe(0);
+    expect(scan.cliOutput).toContain('1 Valid');
+  });
+
+  it('skips alias shadowed by a function parameter of the same name (must NOT count)', () => {
+    const code = `
+const env = process.env;
+function handler(env) {
+  return env.PARAM_SHADOWED_KEY;
+}
+`;
+    const env = `
+PARAM_SHADOWED_KEY=secret_val
+`;
+    const scan = runScan(code, env, 'nextjs');
+    const res = scan.getResult('PARAM_SHADOWED_KEY');
+    expect(res).toBeDefined();
+    expect(res.status).toBe('dead');
+    expect(res.isViolation).toBe(true);
+    expect(scan.references.length).toBe(0);
+    expect(scan.cliOutput).toContain('1 Dead');
+    expect(scan.cliOutput).toContain('PARAM_SHADOWED_KEY');
+  });
+
+  it('resolves env reads through aliases in repro: expect 2 Valid', () => {
+    const code = `
+const env = process.env;
+function getKey(){ return env.API_KEY }
+const cfg = { url: process.env.API_URL };
+`;
+    const env = `
+API_KEY=1
+API_URL=2
+`;
+    const scan = runScan(code, env, 'nextjs');
+    expect(scan.violations.length).toBe(0);
+    expect(scan.getResult('API_KEY')?.status).toBe('valid');
+    expect(scan.getResult('API_URL')?.status).toBe('valid');
+    const validCount = scan.results.filter(r => r.status === 'valid').length;
+    expect(validCount).toBe(2);
+    expect(scan.cliOutput).toContain('2 Valid');
+    expect(scan.cliOutput).toContain('[PASS] 0 violations detected. Clean AST environment configuration.');
+  });
+
+  it('resolves aliases unwrapping TypeScript as, non-null assertions, and optional chaining', () => {
+    const code = `
+const env = ((process.env as any)!);
+function getVal() {
+  return (env as any)?.OPTIONAL_TS_KEY;
+}
+`;
+    const env = `
+OPTIONAL_TS_KEY=ts_value
+`;
+    const scan = runScan(code, env, 'nextjs');
+    expect(scan.violations.length).toBe(0);
+    expect(scan.getResult('OPTIONAL_TS_KEY')?.status).toBe('valid');
+    expect(scan.cliOutput).toContain('1 Valid');
+  });
+
+  it('skips alias shadowed by arrow function parameter or destructured parameter', () => {
+    const code = `
+const env = process.env;
+const fn1 = (env) => env.PARAM_KEY_1;
+const fn2 = ({ env }) => env.PARAM_KEY_2;
+`;
+    const env = `
+PARAM_KEY_1=val1
+PARAM_KEY_2=val2
+`;
+    const scan = runScan(code, env, 'nextjs');
+    expect(scan.references.length).toBe(0);
+    expect(scan.getResult('PARAM_KEY_1')?.status).toBe('dead');
+    expect(scan.getResult('PARAM_KEY_2')?.status).toBe('dead');
+  });
+});
+
+

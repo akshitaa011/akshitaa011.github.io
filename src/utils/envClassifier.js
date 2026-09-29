@@ -60,13 +60,71 @@ export function parseEnvContent(envContent) {
 }
 
 /**
- * Helpers for Babel AST node matching
+ * Helpers for Babel AST node unwrapping and matching
  */
+export function unwrapExpression(node) {
+  let curr = node;
+  while (curr) {
+    if (
+      curr.type === 'TSAsExpression' ||
+      curr.type === 'TSTypeAssertion' ||
+      curr.type === 'TSNonNullExpression' ||
+      curr.type === 'ParenthesizedExpression' ||
+      curr.type === 'TSSatisfiesExpression' ||
+      curr.type === 'TSInstantiationExpression'
+    ) {
+      curr = curr.expression;
+    } else {
+      break;
+    }
+  }
+  return curr;
+}
+
+export function collectParamNames(param, set) {
+  if (!param) return;
+  if (param.type === 'Identifier') {
+    set.add(param.name);
+  } else if (param.type === 'AssignmentPattern') {
+    collectParamNames(param.left, set);
+  } else if (param.type === 'RestElement') {
+    collectParamNames(param.argument, set);
+  } else if (param.type === 'ObjectPattern') {
+    for (const prop of param.properties) {
+      if (prop.type === 'ObjectProperty') {
+        collectParamNames(prop.value, set);
+      } else if (prop.type === 'RestElement') {
+        collectParamNames(prop.argument, set);
+      }
+    }
+  } else if (param.type === 'ArrayPattern') {
+    for (const elem of param.elements) {
+      if (elem) collectParamNames(elem, set);
+    }
+  } else if (param.type === 'TSParameterProperty') {
+    collectParamNames(param.parameter, set);
+  }
+}
+
+export function isFunctionNode(node) {
+  if (!node) return false;
+  return (
+    node.type === 'FunctionDeclaration' ||
+    node.type === 'FunctionExpression' ||
+    node.type === 'ArrowFunctionExpression' ||
+    node.type === 'ObjectMethod' ||
+    node.type === 'ClassMethod' ||
+    node.type === 'ClassPrivateMethod'
+  );
+}
+
 export function isProcessEnvNode(node) {
   if (!node) return false;
-  if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
-  const obj = node.object;
-  const prop = node.property;
+  const unwrapped = unwrapExpression(node);
+  if (!unwrapped) return false;
+  if (unwrapped.type !== 'MemberExpression' && unwrapped.type !== 'OptionalMemberExpression') return false;
+  const obj = unwrapExpression(unwrapped.object);
+  const prop = unwrapped.property;
   return (
     obj &&
     obj.type === 'Identifier' &&
@@ -79,9 +137,11 @@ export function isProcessEnvNode(node) {
 
 export function isImportMetaEnvNode(node) {
   if (!node) return false;
-  if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
-  const obj = node.object;
-  const prop = node.property;
+  const unwrapped = unwrapExpression(node);
+  if (!unwrapped) return false;
+  if (unwrapped.type !== 'MemberExpression' && unwrapped.type !== 'OptionalMemberExpression') return false;
+  const obj = unwrapExpression(unwrapped.object);
+  const prop = unwrapped.property;
   return (
     obj &&
     obj.type === 'MetaProperty' &&
@@ -126,6 +186,67 @@ export function extractAstData(ast, code = '') {
   const references = [];
   const nodesList = [];
 
+  // Alias map for identifiers assigned from process.env / import.meta.env
+  const aliasMap = new Map();
+
+  const registerAlias = (idName, prefix) => {
+    if (idName && typeof idName === 'string') {
+      aliasMap.set(idName, { prefix });
+    }
+  };
+
+  const collectAliases = (node) => {
+    if (!node || typeof node !== 'object') return;
+
+    if (node.type === 'VariableDeclarator' && node.id?.type === 'Identifier' && node.init) {
+      const unwrapped = unwrapExpression(node.init);
+      if (isProcessEnvNode(unwrapped)) {
+        registerAlias(node.id.name, 'process.env');
+      } else if (isImportMetaEnvNode(unwrapped)) {
+        registerAlias(node.id.name, 'import.meta.env');
+      } else if (unwrapped.type === 'Identifier' && aliasMap.has(unwrapped.name)) {
+        registerAlias(node.id.name, aliasMap.get(unwrapped.name).prefix);
+      }
+    } else if (node.type === 'AssignmentExpression' && node.left?.type === 'Identifier' && node.right) {
+      const unwrapped = unwrapExpression(node.right);
+      if (isProcessEnvNode(unwrapped)) {
+        registerAlias(node.left.name, 'process.env');
+      } else if (isImportMetaEnvNode(unwrapped)) {
+        registerAlias(node.left.name, 'import.meta.env');
+      } else if (unwrapped.type === 'Identifier' && aliasMap.has(unwrapped.name)) {
+        registerAlias(node.left.name, aliasMap.get(unwrapped.name).prefix);
+      }
+    }
+
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens') continue;
+      const child = node[key];
+      if (Array.isArray(child)) {
+        for (const item of child) {
+          if (item && typeof item.type === 'string') collectAliases(item);
+        }
+      } else if (child && typeof child.type === 'string') {
+        collectAliases(child);
+      }
+    }
+  };
+
+  // Perform two passes over AST to resolve direct and chained aliases
+  collectAliases(ast.program);
+  collectAliases(ast.program);
+
+  // Stack of parameter names shadowed in nested function scopes
+  const scopeStack = [];
+
+  const isShadowed = (name) => {
+    for (let i = scopeStack.length - 1; i >= 0; i--) {
+      if (scopeStack[i].has(name)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const handleObjectPattern = (pattern, prefix) => {
     if (!pattern || pattern.type !== 'ObjectPattern') return;
     for (const prop of pattern.properties) {
@@ -152,6 +273,17 @@ export function extractAstData(ast, code = '') {
   const walk = (node, depth = 0) => {
     if (!node || typeof node !== 'object') return;
 
+    const isFn = isFunctionNode(node);
+    if (isFn) {
+      const paramShadows = new Set();
+      if (Array.isArray(node.params)) {
+        for (const param of node.params) {
+          collectParamNames(param, paramShadows);
+        }
+      }
+      scopeStack.push(paramShadows);
+    }
+
     if (node.type && typeof node.type === 'string' && code) {
       const preview = code.substring(node.start, Math.min(node.end, node.start + 35)).replace(/\n/g, ' ');
       nodesList.push({
@@ -164,9 +296,9 @@ export function extractAstData(ast, code = '') {
       });
     }
 
-    // MemberExpression & OptionalMemberExpression: process.env.X, process.env?.X, import.meta.env.X
+    // MemberExpression & OptionalMemberExpression: process.env.X, process.env?.X, import.meta.env.X, or alias.X / alias?.X
     if (node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression') {
-      const obj = node.object;
+      const obj = unwrapExpression(node.object);
       const prop = node.property;
 
       if (isProcessEnvNode(obj)) {
@@ -189,33 +321,73 @@ export function extractAstData(ast, code = '') {
             range: [node.start, node.end]
           });
         }
+      } else if (
+        obj &&
+        obj.type === 'Identifier' &&
+        aliasMap.has(obj.name) &&
+        !isShadowed(obj.name)
+      ) {
+        const aliasInfo = aliasMap.get(obj.name);
+        const varName = getPropertyAccessorName(prop, node.computed);
+        if (varName && typeof varName === 'string') {
+          references.push({
+            varName,
+            prefix: aliasInfo.prefix,
+            loc: node.loc,
+            range: [node.start, node.end]
+          });
+        }
       }
     }
 
-    // Destructuring: const { A, B } = process.env;
+    // Destructuring: const { A, B } = process.env; or const { A } = env;
     if (node.type === 'VariableDeclarator' && node.init) {
-      if (isProcessEnvNode(node.init)) {
+      const unwrappedInit = unwrapExpression(node.init);
+      if (isProcessEnvNode(unwrappedInit)) {
         handleObjectPattern(node.id, 'process.env');
-      } else if (isImportMetaEnvNode(node.init)) {
+      } else if (isImportMetaEnvNode(unwrappedInit)) {
         handleObjectPattern(node.id, 'import.meta.env');
+      } else if (
+        unwrappedInit &&
+        unwrappedInit.type === 'Identifier' &&
+        aliasMap.has(unwrappedInit.name) &&
+        !isShadowed(unwrappedInit.name)
+      ) {
+        handleObjectPattern(node.id, aliasMap.get(unwrappedInit.name).prefix);
       }
     }
 
-    // Assignment destructuring: ({ A, B } = process.env);
+    // Assignment destructuring: ({ A, B } = process.env); or ({ A, B } = env);
     if (node.type === 'AssignmentExpression' && node.right) {
-      if (isProcessEnvNode(node.right)) {
+      const unwrappedRight = unwrapExpression(node.right);
+      if (isProcessEnvNode(unwrappedRight)) {
         handleObjectPattern(node.left, 'process.env');
-      } else if (isImportMetaEnvNode(node.right)) {
+      } else if (isImportMetaEnvNode(unwrappedRight)) {
         handleObjectPattern(node.left, 'import.meta.env');
+      } else if (
+        unwrappedRight &&
+        unwrappedRight.type === 'Identifier' &&
+        aliasMap.has(unwrappedRight.name) &&
+        !isShadowed(unwrappedRight.name)
+      ) {
+        handleObjectPattern(node.left, aliasMap.get(unwrappedRight.name).prefix);
       }
     }
 
-    // Default params destructuring: ({ A, B } = process.env)
+    // Default params destructuring: ({ A, B } = process.env) or ({ A, B } = env)
     if (node.type === 'AssignmentPattern' && node.right) {
-      if (isProcessEnvNode(node.right)) {
+      const unwrappedRight = unwrapExpression(node.right);
+      if (isProcessEnvNode(unwrappedRight)) {
         handleObjectPattern(node.left, 'process.env');
-      } else if (isImportMetaEnvNode(node.right)) {
+      } else if (isImportMetaEnvNode(unwrappedRight)) {
         handleObjectPattern(node.left, 'import.meta.env');
+      } else if (
+        unwrappedRight &&
+        unwrappedRight.type === 'Identifier' &&
+        aliasMap.has(unwrappedRight.name) &&
+        !isShadowed(unwrappedRight.name)
+      ) {
+        handleObjectPattern(node.left, aliasMap.get(unwrappedRight.name).prefix);
       }
     }
 
@@ -229,6 +401,10 @@ export function extractAstData(ast, code = '') {
       } else if (child && typeof child.type === 'string') {
         walk(child, depth + 1);
       }
+    }
+
+    if (isFn) {
+      scopeStack.pop();
     }
   };
 
