@@ -23,7 +23,6 @@
     "three": "^0.186.1"
   },
   "devDependencies": {
-    "@rolldown/binding-win32-x64-msvc": "^1.2.11",
     "@types/node": "^26.6.3",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
