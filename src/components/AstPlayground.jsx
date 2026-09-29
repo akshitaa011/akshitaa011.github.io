@@ -1,31 +1,34 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Terminal, Code, Cpu, ChevronRight, Layers, Copy, Check, RotateCcw, AlertOctagon } from 'lucide-react';
+import { Terminal, Code, Cpu, ChevronRight, Layers, Copy, Check, RotateCcw, AlertOctagon, ShieldAlert, Lock, CheckCircle2 } from 'lucide-react';
 import { playClickSound, playHoverSound, playSuccessSound } from '../utils/audioFx';
+import {
+  parseEnvContent,
+  extractAstData,
+  classifyEnvironmentVariables,
+  formatCliOutput,
+  STATUS_MESSAGES
+} from '../utils/envClassifier';
 
 const PRESETS = {
   nextjs: {
     name: "Next.js Rule",
     framework: "Next.js App Router (process.env)",
     ruleHint: "Server/Client scoping with NEXT_PUBLIC_ or server-only secrets",
-    defaultCode: `// app/api/auth/route.ts
-import { NextResponse } from "next/server";
+    defaultCode: `// app/dashboard/page.tsx
+'use client';
 
-export async function POST(req: Request) {
-  // ✔ Valid: Defined in .env and read in handler
-  const secret = process.env.AUTH_SECRET;
+// ✔ Valid: Client-safe exposed variable
+const apiUrl = process.env.NEXT_PUBLIC_API_URL;
 
-  // ✖ Missing: Referenced in code, omitted in .env
-  const dbUrl = process.env.DATABASE_URL;
+// ✖ Unexposed: Server-only secret read in client component
+const stripeKey = process.env.STRIPE_SECRET_KEY;
 
-  // ⚠ Empty: Defined in .env without an assigned value
-  const timeout = process.env.TIMEOUT_MS;
-
-  return NextResponse.json({ status: "ok", secret, dbUrl, timeout });
-}`,
-    defaultEnv: `AUTH_SECRET=sk_live_9928341908
-OLD_LEGACY_KEY=deprecated_value_never_used
-TIMEOUT_MS=
-AUTH_SECRET=sk_duplicate_key_test`
+// 🔒 Leak Risk: Sensitive keyword exposed with NEXT_PUBLIC_
+const leakedAuth = process.env.NEXT_PUBLIC_AUTH_TOKEN;`,
+    defaultEnv: `NEXT_PUBLIC_API_URL=https://api.example.com
+STRIPE_SECRET_KEY=sk_live_123456789
+NEXT_PUBLIC_AUTH_TOKEN=jwt_secret_token_exposed
+DATABASE_URL=postgres://user:pass@localhost:5432/db`
   },
   vite: {
     name: "Vite Prefix Rule",
@@ -57,8 +60,11 @@ export default function AstPlayground() {
 
   const [parseError, setParseError] = useState(null);
   const [astNodes, setAstNodes] = useState([]);
-  const [envReferences, setEnvReferences] = useState([]);
+  const [classifiedResults, setClassifiedResults] = useState([]);
+  const [isClientComponent, setIsClientComponent] = useState(false);
+  const [executionTimeMs, setExecutionTimeMs] = useState(0.12);
   const [activeNode, setActiveNode] = useState(null);
+  const [highlightRange, setHighlightRange] = useState(null);
 
   const [copied, setCopied] = useState(false);
   const [isParsing, setIsParsing] = useState(false);
@@ -87,38 +93,7 @@ export default function AstPlayground() {
 
   // Parse .env line-by-line
   const parsedEnv = useMemo(() => {
-    const lines = envContent.split('\n');
-    const entries = [];
-    const keyCounts = {};
-
-    lines.forEach((line, index) => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return;
-
-      const match = trimmed.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/);
-      if (match) {
-        const key = match[1];
-        const rawValue = match[2];
-        keyCounts[key] = (keyCounts[key] || 0) + 1;
-
-        entries.push({
-          key,
-          value: rawValue,
-          line: index + 1,
-          isEmpty: rawValue.trim() === '',
-          isDuplicate: keyCounts[key] > 1,
-        });
-      }
-    });
-
-    // Mark previous occurrences of duplicate keys
-    entries.forEach(e => {
-      if (keyCounts[e.key] > 1) {
-        e.isDuplicate = true;
-      }
-    });
-
-    return { entries, keyCounts };
+    return parseEnvContent(envContent);
   }, [envContent]);
 
   // Live in-browser AST parsing via lazy-loaded @babel/parser
@@ -130,6 +105,7 @@ export default function AstPlayground() {
     setIsParsing(true);
 
     debounceTimerRef.current = setTimeout(async () => {
+      const startTime = performance.now();
       try {
         const { parse } = await import('@babel/parser');
         const ast = parse(code, {
@@ -140,170 +116,24 @@ export default function AstPlayground() {
 
         setParseError(null);
 
-        const nodesList = [];
-        const references = [];
+        // Extract AST references, directives, and node graph
+        const { references, isClientComponent: isClient, nodesList } = extractAstData(ast, code);
+        setIsClientComponent(isClient);
 
-        const isProcessEnv = (node) => {
-          if (!node) return false;
-          if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
-          const obj = node.object;
-          const prop = node.property;
-          return (
-            obj &&
-            obj.type === 'Identifier' &&
-            obj.name === 'process' &&
-            prop &&
-            prop.type === 'Identifier' &&
-            prop.name === 'env'
-          );
-        };
+        // Single source-of-truth classification
+        const results = classifyEnvironmentVariables({
+          parsedEnv,
+          envReferences: references,
+          isClientComponent: isClient,
+          mode: selectedPresetKey
+        });
 
-        const isImportMetaEnv = (node) => {
-          if (!node) return false;
-          if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
-          const obj = node.object;
-          const prop = node.property;
-          return (
-            obj &&
-            obj.type === 'MetaProperty' &&
-            obj.meta?.name === 'import' &&
-            obj.property?.name === 'meta' &&
-            prop &&
-            prop.type === 'Identifier' &&
-            prop.name === 'env'
-          );
-        };
+        const endTime = performance.now();
+        const elapsed = Math.max(0.01, endTime - startTime);
+        setExecutionTimeMs(elapsed);
 
-        const getPropertyName = (prop, computed) => {
-          if (!prop) return null;
-          if (!computed) {
-            return prop.type === 'Identifier' ? prop.name : null;
-          }
-          if (prop.type === 'StringLiteral') return prop.value;
-          if (prop.type === 'TemplateLiteral' && prop.quasis?.length === 1) {
-            return prop.quasis[0].value?.raw;
-          }
-          if (prop.type === 'Identifier') return prop.name;
-          return null;
-        };
-
-        const handleObjectPattern = (pattern, prefix) => {
-          if (!pattern || pattern.type !== 'ObjectPattern') return;
-          for (const prop of pattern.properties) {
-            if (prop.type === 'ObjectProperty') {
-              let varName = null;
-              if (!prop.computed && prop.key?.type === 'Identifier') {
-                varName = prop.key.name;
-              } else if (prop.key?.type === 'StringLiteral') {
-                varName = prop.key.value;
-              }
-
-              if (varName && typeof varName === 'string') {
-                const isVitePrefixIssue = selectedPresetKey === 'vite' && prefix === 'import.meta.env' && !varName.startsWith('VITE_');
-                references.push({
-                  varName,
-                  prefix,
-                  loc: prop.loc,
-                  range: [prop.start, prop.end],
-                  isVitePrefixIssue
-                });
-              }
-            }
-          }
-        };
-
-        // Recursive AST Traversal
-        const walk = (node, depth = 0) => {
-          if (!node || typeof node !== 'object') return;
-
-          // Track readable AST nodes for the Tree View
-          if (node.type && typeof node.type === 'string') {
-            const preview = code.substring(node.start, Math.min(node.end, node.start + 35)).replace(/\n/g, ' ');
-            nodesList.push({
-              type: node.type,
-              depth,
-              range: [node.start, node.end],
-              loc: node.loc,
-              preview: preview || node.type,
-              astNode: node
-            });
-          }
-
-          // 1. Direct or Optional property access: process.env.X, process.env?.X, process.env['X'], import.meta.env.X, etc.
-          if (node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression') {
-            const obj = node.object;
-            const prop = node.property;
-
-            if (isProcessEnv(obj)) {
-              const varName = getPropertyName(prop, node.computed);
-              if (varName && typeof varName === 'string') {
-                references.push({
-                  varName,
-                  prefix: 'process.env',
-                  loc: node.loc,
-                  range: [node.start, node.end],
-                  isVitePrefixIssue: false
-                });
-              }
-            } else if (isImportMetaEnv(obj)) {
-              const varName = getPropertyName(prop, node.computed);
-              if (varName && typeof varName === 'string') {
-                const isVitePrefixIssue = selectedPresetKey === 'vite' && !varName.startsWith('VITE_');
-                references.push({
-                  varName,
-                  prefix: 'import.meta.env',
-                  loc: node.loc,
-                  range: [node.start, node.end],
-                  isVitePrefixIssue
-                });
-              }
-            }
-          }
-
-          // 2. Destructuring in VariableDeclarator: const { A, B } = process.env;
-          if (node.type === 'VariableDeclarator' && node.init) {
-            if (isProcessEnv(node.init)) {
-              handleObjectPattern(node.id, 'process.env');
-            } else if (isImportMetaEnv(node.init)) {
-              handleObjectPattern(node.id, 'import.meta.env');
-            }
-          }
-
-          // 3. Destructuring in AssignmentExpression: ({ A, B } = process.env);
-          if (node.type === 'AssignmentExpression' && node.right) {
-            if (isProcessEnv(node.right)) {
-              handleObjectPattern(node.left, 'process.env');
-            } else if (isImportMetaEnv(node.right)) {
-              handleObjectPattern(node.left, 'import.meta.env');
-            }
-          }
-
-          // 4. Destructuring in AssignmentPattern (default params): ({ A, B } = process.env)
-          if (node.type === 'AssignmentPattern' && node.right) {
-            if (isProcessEnv(node.right)) {
-              handleObjectPattern(node.left, 'process.env');
-            } else if (isImportMetaEnv(node.right)) {
-              handleObjectPattern(node.left, 'import.meta.env');
-            }
-          }
-
-          for (const key of Object.keys(node)) {
-            if (key === 'loc' || key === 'range' || key === 'comments' || key === 'tokens') continue;
-            const child = node[key];
-            if (Array.isArray(child)) {
-              for (const item of child) {
-                if (item && typeof item.type === 'string') walk(item, depth + 1, node);
-              }
-            } else if (child && typeof child.type === 'string') {
-              walk(child, depth + 1, node);
-            }
-          }
-        };
-
-        walk(ast.program, 0);
-
-        setAstNodes(nodesList.slice(0, 45)); // keep list performant
-        setEnvReferences(references);
+        setAstNodes(nodesList.slice(0, 45)); // keep tree view performant
+        setClassifiedResults(results);
       } catch (err) {
         setParseError(err.message || 'Syntax parse error in code editor');
       } finally {
@@ -312,145 +142,29 @@ export default function AstPlayground() {
     }, 200);
 
     return () => clearTimeout(debounceTimerRef.current);
-  }, [code, selectedPresetKey]);
+  }, [code, envContent, selectedPresetKey, parsedEnv]);
 
-  // Classification Logic: VALID, MISSING, DEAD, EMPTY, DUPLICATE
-  const analysis = useMemo(() => {
-    const envMap = new Map();
-    parsedEnv.entries.forEach(e => {
-      if (!envMap.has(e.key)) envMap.set(e.key, []);
-      envMap.get(e.key).push(e);
-    });
-
-    const codeRefMap = new Map();
-    envReferences.forEach(ref => {
-      if (!codeRefMap.has(ref.varName)) codeRefMap.set(ref.varName, []);
-      codeRefMap.get(ref.varName).push(ref);
-    });
-
-    const missing = [];
-    const dead = [];
-    const empty = [];
-    const duplicate = [];
-    const valid = [];
-    const security = [];
-
-    // Check code references against .env
-    codeRefMap.forEach((refs, varName) => {
-      const inEnv = envMap.get(varName);
-      if (!inEnv || inEnv.length === 0) {
-        missing.push({ varName, refs });
-      } else {
-        const hasEmpty = inEnv.some(e => e.isEmpty);
-        const hasSecurity = refs.some(r => r.isVitePrefixIssue);
-
-        if (hasSecurity) {
-          security.push({ varName, refs, envEntries: inEnv });
-        } else if (hasEmpty) {
-          empty.push({ varName, refs, envEntry: inEnv.find(e => e.isEmpty) });
-        } else {
-          valid.push({ varName, refs, envEntries: inEnv });
-        }
-      }
-    });
-
-    // Check .env entries against code references (Dead & Duplicate)
-    envMap.forEach((entries, key) => {
-      if (!codeRefMap.has(key)) {
-        dead.push({ key, line: entries[0].line, value: entries[0].value });
-      }
-      if (entries.length > 1) {
-        duplicate.push({ key, lines: entries.map(e => e.line) });
-      }
-    });
-
-    return { missing, dead, empty, duplicate, valid, security };
-  }, [parsedEnv, envReferences]);
+  // Summary counts derived strictly from the single classifiedResults array
+  const counts = useMemo(() => ({
+    valid: classifiedResults.filter(r => r.status === 'valid').length,
+    unexposed: classifiedResults.filter(r => r.status === 'unexposed').length,
+    leakRisk: classifiedResults.filter(r => r.status === 'leakRisk').length,
+    missing: classifiedResults.filter(r => r.status === 'missing').length,
+    dead: classifiedResults.filter(r => r.status === 'dead').length,
+    empty: classifiedResults.filter(r => r.status === 'empty').length,
+    duplicate: classifiedResults.filter(r => r.status === 'duplicate').length,
+    totalViolations: classifiedResults.filter(r => r.isViolation).length
+  }), [classifiedResults]);
 
   // Formatted CLI diagnostic text
   const cliText = useMemo(() => {
-    let out = `$ npx envguard scan --strict\n\n`;
-    out += `🔍 Scanning AST in ${selectedPresetKey === 'nextjs' ? 'Next.js App' : 'Vite React'} project...\n`;
-    out += `📁 Analyzed 1 source file + .env configuration\n\n`;
-
-    const totalIssues = analysis.missing.length + analysis.dead.length + analysis.empty.length + analysis.duplicate.length + analysis.security.length;
-
-    if (totalIssues > 0) {
-      out += `✖ [FAIL] ${totalIssues} static environment violation(s) detected:\n\n`;
-    } else {
-      out += `✔ [PASS] 0 violations detected. Clean AST environment configuration.\n\n`;
-    }
-
-    if (analysis.missing.length > 0) {
-      out += `✖ MISSING (referenced in AST, not declared in .env):\n`;
-      analysis.missing.forEach(m => {
-        out += `  • ${m.varName}\n`;
-        m.refs.forEach(r => {
-          out += `    └─ Referenced at line ${r.loc?.start?.line}:${r.loc?.start?.column} (${r.prefix}.${m.varName})\n`;
-        });
-      });
-      out += `\n`;
-    }
-
-    if (analysis.dead.length > 0) {
-      out += `✖ DEAD (declared in .env, never referenced in AST):\n`;
-      analysis.dead.forEach(d => {
-        out += `  • ${d.key} (line ${d.line})\n`;
-        out += `    └─ Declared with value but zero AST read nodes found\n`;
-      });
-      out += `\n`;
-    }
-
-    if (analysis.empty.length > 0) {
-      out += `⚠ EMPTY (declared with blank/empty value in .env):\n`;
-      analysis.empty.forEach(e => {
-        out += `  • ${e.varName} (line ${e.envEntry?.line})\n`;
-        out += `    └─ Assigned empty string; will evaluate to undefined\n`;
-      });
-      out += `\n`;
-    }
-
-    if (analysis.duplicate.length > 0) {
-      out += `⚠ DUPLICATE (defined multiple times in .env):\n`;
-      analysis.duplicate.forEach(dup => {
-        out += `  • ${dup.key}\n`;
-        out += `    └─ Repeated on lines: ${dup.lines.join(', ')}\n`;
-      });
-      out += `\n`;
-    }
-
-    if (analysis.security.length > 0) {
-      out += `🔒 SECURITY WARNING (client exposure prefix missing):\n`;
-      analysis.security.forEach(s => {
-        out += `  • ${s.varName}\n`;
-        out += `    └─ Vite rule requires 'VITE_' prefix to expose variables to client bundle\n`;
-      });
-      out += `\n`;
-    }
-
-    if (analysis.valid.length > 0) {
-      out += `✔ VALID (active and verified in AST):\n`;
-      analysis.valid.forEach(v => {
-        out += `  • ${v.varName} (defined line ${v.envEntries[0]?.line})\n`;
-      });
-      out += `\n`;
-    }
-
-    out += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    const summaryParts = [
-      `${analysis.valid.length} Valid`,
-      analysis.security.length > 0 ? `${analysis.security.length} Security Warning${analysis.security.length > 1 ? 's' : ''}` : null,
-      `${analysis.missing.length} Missing`,
-      `${analysis.dead.length} Dead`,
-      `${analysis.empty.length} Empty`,
-      `${analysis.duplicate.length} Duplicate`
-    ].filter(Boolean);
-
-    out += `Summary: ${summaryParts.join(' | ')}\n`;
-    out += `Execution: 0.12s | @babel/parser dynamic engine`;
-
-    return out;
-  }, [analysis, selectedPresetKey]);
+    return formatCliOutput({
+      results: classifiedResults,
+      mode: selectedPresetKey,
+      isClientComponent,
+      executionTimeMs
+    });
+  }, [classifiedResults, selectedPresetKey, isClientComponent, executionTimeMs]);
 
   // Copy CLI output
   const handleCopyCli = () => {
@@ -489,6 +203,11 @@ export default function AstPlayground() {
                 <span className="w-1.5 h-1.5 rounded-full bg-[#10B981] animate-ping"></span>
                 @babel/parser
               </span>
+              {selectedPresetKey === 'nextjs' && isClientComponent && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/70 text-cyan-300 border border-cyan-500/40">
+                  'use client' active
+                </span>
+              )}
             </h4>
             <p className="text-xs text-[#9CA3AF] font-mono">{PRESETS[selectedPresetKey].ruleHint}</p>
           </div>
@@ -601,13 +320,35 @@ export default function AstPlayground() {
         <div className="rounded-xl bg-[#030712] border border-white/[0.08] p-4 font-mono text-xs overflow-x-auto min-h-[340px]">
           <div className="flex items-center justify-between text-[11px] text-slate-500 pb-2 border-b border-white/[0.08] mb-3">
             <span>Babel AST Traversal (Click any node to highlight range):</span>
-            <span>{astNodes.length} nodes parsed</span>
+            <span>{astNodes.length} nodes parsed • {counts.totalViolations} violations</span>
           </div>
 
           <div className="space-y-1">
             {astNodes.map((node, idx) => {
               const isSelected = activeNode === node;
               const isEnvNode = node.preview.includes('process.env') || node.preview.includes('import.meta.env');
+              const matchedResult = classifiedResults.find(r => node.preview.includes(r.key));
+
+              let statusBadge = null;
+              if (matchedResult) {
+                if (matchedResult.status === 'valid') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md badge-emerald shrink-0 font-bold">VALID</span>;
+                } else if (matchedResult.status === 'unexposed') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md bg-rose-950/80 text-rose-300 border border-rose-500/50 shrink-0 font-bold">UNEXPOSED</span>;
+                } else if (matchedResult.status === 'leakRisk') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-950/80 text-amber-300 border border-amber-500/50 shrink-0 font-bold">LEAK RISK</span>;
+                } else if (matchedResult.status === 'missing') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md bg-rose-950/80 text-rose-300 border border-rose-500/50 shrink-0 font-bold">MISSING</span>;
+                } else if (matchedResult.status === 'empty') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md bg-amber-950/80 text-amber-300 border border-amber-500/50 shrink-0 font-bold">EMPTY</span>;
+                } else if (matchedResult.status === 'duplicate') {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md bg-purple-950/80 text-purple-300 border border-purple-500/50 shrink-0 font-bold">DUPLICATE</span>;
+                } else {
+                  statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md badge-indigo shrink-0 font-bold">DEAD</span>;
+                }
+              } else if (isEnvNode) {
+                statusBadge = <span className="text-[10px] px-2 py-0.5 rounded-md badge-emerald shrink-0 font-bold">ENV NODE</span>;
+              }
 
               return (
                 <div
@@ -617,6 +358,8 @@ export default function AstPlayground() {
                   className={`py-1.5 px-2.5 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${
                     isSelected
                       ? 'bg-[#10B981]/20 border border-[#10B981]/60 text-white shadow-sm'
+                      : matchedResult?.isViolation
+                      ? 'bg-rose-950/20 hover:bg-rose-950/30 border border-rose-500/30 text-rose-200'
                       : isEnvNode
                       ? 'bg-[#6366F1]/10 hover:bg-[#6366F1]/20 border border-[#6366F1]/30 text-[#A5B4FC]'
                       : 'hover:bg-slate-900/80 text-[#9CA3AF]'
@@ -630,11 +373,7 @@ export default function AstPlayground() {
                     </span>
                   </div>
 
-                  {isEnvNode && (
-                    <span className="text-[10px] px-2 py-0.5 rounded-md badge-emerald shrink-0 font-bold">
-                      ENV NODE
-                    </span>
-                  )}
+                  {statusBadge}
                 </div>
               );
             })}
@@ -714,29 +453,61 @@ export default function AstPlayground() {
         </div>
       )}
 
-      {/* Live Status Classification Strip */}
+      {/* Live Status Classification Strip (Footer Badges) */}
       <div className="mt-4 pt-3 border-t border-white/[0.08] flex flex-wrap items-center justify-between gap-3 text-xs font-mono">
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-slate-500">Live Heuristics:</span>
-          <span className="px-2 py-0.5 rounded-md badge-emerald text-[11px]">
-            {analysis.valid.length} Valid
+          
+          <span className="px-2 py-0.5 rounded-md badge-emerald text-[11px] font-semibold">
+            {counts.valid} Valid
           </span>
-          {analysis.security.length > 0 && (
-            <span className="px-2 py-0.5 rounded-md text-[11px] bg-amber-950/60 text-amber-300 border border-amber-500/40 font-semibold">
-              {analysis.security.length} Security Warning{analysis.security.length > 1 ? 's' : ''}
-            </span>
-          )}
-          <span className={`px-2 py-0.5 rounded-md text-[11px] ${analysis.missing.length > 0 ? 'bg-rose-950/60 text-rose-300 border border-rose-500/40' : 'bg-slate-900 text-slate-500 border border-white/5'}`}>
-            {analysis.missing.length} Missing
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.unexposed > 0
+              ? 'bg-rose-950/60 text-rose-300 border border-rose-500/40'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.unexposed} Unexposed
           </span>
-          <span className={`px-2 py-0.5 rounded-md text-[11px] ${analysis.dead.length > 0 ? 'badge-indigo' : 'bg-slate-900 text-slate-500 border border-white/5'}`}>
-            {analysis.dead.length} Dead
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.leakRisk > 0
+              ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.leakRisk} Leak Risk
           </span>
-          <span className={`px-2 py-0.5 rounded-md text-[11px] ${analysis.empty.length > 0 ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40' : 'bg-slate-900 text-slate-500 border border-white/5'}`}>
-            {analysis.empty.length} Empty
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.missing > 0
+              ? 'bg-rose-950/60 text-rose-300 border border-rose-500/40'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.missing} Missing
           </span>
-          <span className={`px-2 py-0.5 rounded-md text-[11px] ${analysis.duplicate.length > 0 ? 'bg-purple-950/60 text-purple-300 border border-purple-500/40' : 'bg-slate-900 text-slate-500 border border-white/5'}`}>
-            {analysis.duplicate.length} Duplicate
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.dead > 0
+              ? 'badge-indigo'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.dead} Dead
+          </span>
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.empty > 0
+              ? 'bg-amber-950/60 text-amber-300 border border-amber-500/40'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.empty} Empty
+          </span>
+
+          <span className={`px-2 py-0.5 rounded-md text-[11px] font-semibold transition-colors ${
+            counts.duplicate > 0
+              ? 'bg-purple-950/60 text-purple-300 border border-purple-500/40'
+              : 'bg-slate-900 text-slate-500 border border-white/5'
+          }`}>
+            {counts.duplicate} Duplicate
           </span>
         </div>
 
