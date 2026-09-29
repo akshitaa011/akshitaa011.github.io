@@ -143,6 +143,75 @@ export default function AstPlayground() {
         const nodesList = [];
         const references = [];
 
+        const isProcessEnv = (node) => {
+          if (!node) return false;
+          if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
+          const obj = node.object;
+          const prop = node.property;
+          return (
+            obj &&
+            obj.type === 'Identifier' &&
+            obj.name === 'process' &&
+            prop &&
+            prop.type === 'Identifier' &&
+            prop.name === 'env'
+          );
+        };
+
+        const isImportMetaEnv = (node) => {
+          if (!node) return false;
+          if (node.type !== 'MemberExpression' && node.type !== 'OptionalMemberExpression') return false;
+          const obj = node.object;
+          const prop = node.property;
+          return (
+            obj &&
+            obj.type === 'MetaProperty' &&
+            obj.meta?.name === 'import' &&
+            obj.property?.name === 'meta' &&
+            prop &&
+            prop.type === 'Identifier' &&
+            prop.name === 'env'
+          );
+        };
+
+        const getPropertyName = (prop, computed) => {
+          if (!prop) return null;
+          if (!computed) {
+            return prop.type === 'Identifier' ? prop.name : null;
+          }
+          if (prop.type === 'StringLiteral') return prop.value;
+          if (prop.type === 'TemplateLiteral' && prop.quasis?.length === 1) {
+            return prop.quasis[0].value?.raw;
+          }
+          if (prop.type === 'Identifier') return prop.name;
+          return null;
+        };
+
+        const handleObjectPattern = (pattern, prefix) => {
+          if (!pattern || pattern.type !== 'ObjectPattern') return;
+          for (const prop of pattern.properties) {
+            if (prop.type === 'ObjectProperty') {
+              let varName = null;
+              if (!prop.computed && prop.key?.type === 'Identifier') {
+                varName = prop.key.name;
+              } else if (prop.key?.type === 'StringLiteral') {
+                varName = prop.key.value;
+              }
+
+              if (varName && typeof varName === 'string') {
+                const isVitePrefixIssue = selectedPresetKey === 'vite' && prefix === 'import.meta.env' && !varName.startsWith('VITE_');
+                references.push({
+                  varName,
+                  prefix,
+                  loc: prop.loc,
+                  range: [prop.start, prop.end],
+                  isVitePrefixIssue
+                });
+              }
+            }
+          }
+        };
+
         // Recursive AST Traversal
         const walk = (node, depth = 0) => {
           if (!node || typeof node !== 'object') return;
@@ -160,19 +229,13 @@ export default function AstPlayground() {
             });
           }
 
-          // 1. Detect process.env.X or process.env['X']
-          if (node.type === 'MemberExpression') {
+          // 1. Direct or Optional property access: process.env.X, process.env?.X, process.env['X'], import.meta.env.X, etc.
+          if (node.type === 'MemberExpression' || node.type === 'OptionalMemberExpression') {
             const obj = node.object;
             const prop = node.property;
 
-            // process.env.X
-            if (
-              obj &&
-              obj.type === 'MemberExpression' &&
-              obj.object?.name === 'process' &&
-              obj.property?.name === 'env'
-            ) {
-              const varName = node.computed ? prop.value : prop.name;
+            if (isProcessEnv(obj)) {
+              const varName = getPropertyName(prop, node.computed);
               if (varName && typeof varName === 'string') {
                 references.push({
                   varName,
@@ -182,18 +245,8 @@ export default function AstPlayground() {
                   isVitePrefixIssue: false
                 });
               }
-            }
-
-            // 2. Detect import.meta.env.X
-            if (
-              obj &&
-              obj.type === 'MemberExpression' &&
-              obj.object?.type === 'MetaProperty' &&
-              obj.object.meta?.name === 'import' &&
-              obj.object.property?.name === 'meta' &&
-              obj.property?.name === 'env'
-            ) {
-              const varName = node.computed ? prop.value : prop.name;
+            } else if (isImportMetaEnv(obj)) {
+              const varName = getPropertyName(prop, node.computed);
               if (varName && typeof varName === 'string') {
                 const isVitePrefixIssue = selectedPresetKey === 'vite' && !varName.startsWith('VITE_');
                 references.push({
@@ -204,6 +257,33 @@ export default function AstPlayground() {
                   isVitePrefixIssue
                 });
               }
+            }
+          }
+
+          // 2. Destructuring in VariableDeclarator: const { A, B } = process.env;
+          if (node.type === 'VariableDeclarator' && node.init) {
+            if (isProcessEnv(node.init)) {
+              handleObjectPattern(node.id, 'process.env');
+            } else if (isImportMetaEnv(node.init)) {
+              handleObjectPattern(node.id, 'import.meta.env');
+            }
+          }
+
+          // 3. Destructuring in AssignmentExpression: ({ A, B } = process.env);
+          if (node.type === 'AssignmentExpression' && node.right) {
+            if (isProcessEnv(node.right)) {
+              handleObjectPattern(node.left, 'process.env');
+            } else if (isImportMetaEnv(node.right)) {
+              handleObjectPattern(node.left, 'import.meta.env');
+            }
+          }
+
+          // 4. Destructuring in AssignmentPattern (default params): ({ A, B } = process.env)
+          if (node.type === 'AssignmentPattern' && node.right) {
+            if (isProcessEnv(node.right)) {
+              handleObjectPattern(node.left, 'process.env');
+            } else if (isImportMetaEnv(node.right)) {
+              handleObjectPattern(node.left, 'import.meta.env');
             }
           }
 
