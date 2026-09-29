@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "prebuild": "node scripts/fetch-github-repos.js",
-    "build": "vite build",
+    "build": "vite build && node scripts/prepare-deploy.js",
     "lint": "oxlint",
     "test": "vitest run",
     "preview": "vite preview",
